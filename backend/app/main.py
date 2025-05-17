@@ -25,7 +25,7 @@
 #     return {"message": "Welcome to AI Task Manager"}
 
 
-# from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
@@ -36,7 +36,7 @@ import os
 from fastapi import FastAPI, Depends, HTTPException, status
 
 
-DATABASE_URL = "postgresql://postgres:1234@localhost/taskdb"
+DATABASE_URL = "postgresql://postgres:1234@localhost:8000/taskdb"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -73,7 +73,7 @@ class TaskCreate(TaskBase):
 class TaskOut(TaskBase):
     id: int
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class UserCreate(BaseModel):
     username: str
@@ -111,7 +111,7 @@ def get_tasks(db: Session = Depends(get_db)):
 
 @app.post("/tasks", response_model=TaskOut)
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
-    new_task = Task(**task.dict(), owner_id=1)  # Replace with real user ID
+    new_task = Task(**task.dict(), owner_id=11180)  # Replace with real user ID
     db.add(new_task)
     db.commit()
     db.refresh(new_task)
@@ -119,7 +119,7 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
 
 @app.post("/tasks/suggest", response_model=TaskOut)
 def suggest_task(db: Session = Depends(get_db)):
-    openai.api_key = os.getenv("")
+    openai.api_key = os.getenv("OPENAI_API_KEY")
     response = openai.Completion.create(
         engine="text-davinci-003",
         prompt="Suggest a productive task for a software engineer",
