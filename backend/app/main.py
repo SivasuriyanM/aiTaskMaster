@@ -1,30 +1,13 @@
-# from fastapi import FastAPI
-# from app import auth, models, database
-# from app.models import Task
-# from app.schemas import TaskCreate
-# from app.auth import get_current_user
-# from fastapi.middleware.cors import CORSMiddleware
-# from fastapi import Depends, HTTPException
-# from sqlalchemy.orm import Session
-# from app.ai_task_generator import generate_task
-# from app.database import get_db
-
-# models.Base.metadata.create_all(bind=database.engine)
-
-# app = FastAPI()
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
-# @app.get("/")
-# def read_root():
-#     return {"message": "Welcome to AI Task Manager"}
-
-
+from fastapi import FastAPI
+from app import auth, models, database
+from app.models import Task,User
+from app.schemas import TaskCreate, UserCreate, UserOut, TaskOut;
+from app.auth import get_current_user
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.ai_task_generator import generate_task
+from app.database import get_db
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -33,65 +16,95 @@ from pydantic import BaseModel
 from typing import List, Optional
 import openai
 import os
-from fastapi import FastAPI, Depends, HTTPException, status
 
+from passlib.context import CryptContext
 
-DATABASE_URL = "postgresql://postgres:1234@localhost:8000/taskdb"
+from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import status
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+from transformers import pipeline
+
+# Load once at startup (this can take time and lots of RAM)
+text_gen_pipe = pipeline("text-generation", model="mistralai/Mistral-7B-Instruct-v0.2")
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# SQLAlchemy models
-class User(Base):
-    __tablename__ = 'users'
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    password = Column(String)
-    tasks = relationship("Task", back_populates="owner")
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to AI Task Manager"}
 
-class Task(Base):
-    __tablename__ = 'tasks'
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String)
-    description = Column(String)
-    completed = Column(Boolean, default=False)
-    owner_id = Column(Integer, ForeignKey("users.id"))
-    owner = relationship("User", back_populates="tasks")
 
-# Pydantic schemas
-class TaskBase(BaseModel):
-    title: str
-    description: Optional[str] = None
-    completed: Optional[bool] = False
 
-class TaskCreate(TaskBase):
-    pass
+# from fastapi import FastAPI, Depends, HTTPException, status
 
-class TaskOut(TaskBase):
-    id: int
-    class Config:
-        from_attributes = True
 
-class UserCreate(BaseModel):
-    username: str
-    password: str
+# DATABASE_URL = "postgresql://postgres:1234@localhost:8000/taskdb"
 
-class UserOut(BaseModel):
-    id: int
-    username: str
-    class Config:
-        orm_mode = True
+# engine = create_engine(DATABASE_URL)
+# SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Base = declarative_base()
 
-# Dependency to get DB session
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# app = FastAPI()
+
+# # SQLAlchemy models
+# class User(Base):
+#     __tablename__ = 'users'
+#     id = Column(Integer, primary_key=True, index=True)
+#     username = Column(String, unique=True, index=True)
+#     password = Column(String)
+#     tasks = relationship("Task", back_populates="owner")
+
+# class Task(Base):
+#     __tablename__ = 'tasks'
+#     id = Column(Integer, primary_key=True, index=True)
+#     title = Column(String)
+#     description = Column(String)
+#     completed = Column(Boolean, default=False)
+#     owner_id = Column(Integer, ForeignKey("users.id"))
+#     owner = relationship("User", back_populates="tasks")
+
+# # Pydantic schemas
+# class TaskBase(BaseModel):
+#     title: str
+#     description: Optional[str] = None
+#     completed: Optional[bool] = False
+
+# class TaskCreate(TaskBase):
+#     pass
+
+# class TaskOut(TaskBase):
+#     id: int
+#     class Config:
+#         from_attributes = True
+
+# class UserCreate(BaseModel):
+#     username: str
+#     password: str
+
+# class UserOut(BaseModel):
+#     id: int
+#     username: str
+#     class Config:
+#         orm_mode = True
+
+# # Dependency to get DB session
+# def get_db():
+#     db = SessionLocal()
+#     try:
+#         yield db
+#     finally:
+#         db.close()
 
 # Routes
 @app.post("/register", response_model=UserOut)
@@ -99,11 +112,24 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
-    new_user = User(username=user.username, password=user.password)
+    hashed_pw = pwd_context.hash(user.password)
+    new_user = User(username=user.username, hashed_password=hashed_pw)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     return new_user
+
+@app.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not pwd_context.verify(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    # For simplicity, just return a dummy token (replace with JWT in production)
+    return {"access_token": user.username, "token_type": "bearer"}
+
+@app.get("/users", response_model=List[UserOut])
+def get_users(db: Session = Depends(get_db)):
+    return db.query(User).all()
 
 @app.get("/tasks", response_model=List[TaskOut])
 def get_tasks(db: Session = Depends(get_db)):
@@ -111,7 +137,7 @@ def get_tasks(db: Session = Depends(get_db)):
 
 @app.post("/tasks", response_model=TaskOut)
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
-    new_task = Task(**task.dict(), owner_id=11180)  # Replace with real user ID
+    new_task = Task(**task.model_dump(), owner_id=1)  # Replace with real user ID
     db.add(new_task)
     db.commit()
     db.refresh(new_task)
@@ -119,18 +145,14 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
 
 @app.post("/tasks/suggest", response_model=TaskOut)
 def suggest_task(db: Session = Depends(get_db)):
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    response = openai.Completion.create(
-        engine="text-davinci-003",
-        prompt="Suggest a productive task for a software engineer",
-        max_tokens=50
-    )
-    suggestion = response.choices[0].text.strip()
-    new_task = Task(title=suggestion, description="Generated by AI", owner_id=1)
+    prompt = "Suggest a productive task for a software engineer"
+    result = text_gen_pipe(prompt, max_new_tokens=50)
+    suggestion = result[0]["generated_text"].replace(prompt, "").strip()
+    new_task = Task(title=suggestion, description="Generated by Mistral", owner_id=1)  # Replace owner_id as needed
     db.add(new_task)
     db.commit()
     db.refresh(new_task)
     return new_task
 
-# Initialize DB tables
-Base.metadata.create_all(bind=engine)
+# # Initialize DB tables
+# Base.metadata.create_all(bind=engine)

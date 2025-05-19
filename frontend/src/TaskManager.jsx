@@ -25,6 +25,7 @@ const TaskManager = () => {
     try {
       const res = await axios.post(`${API_URL}/login`, new URLSearchParams({ username, password }));
       setToken(res.data.access_token);
+      alert('Logined In');
     } catch (err) {
       alert('Login failed');
     }
